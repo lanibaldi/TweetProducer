@@ -190,7 +190,7 @@ namespace TweetProducer
 
                         string cd = tweet.CreatedDate.ToString(System.Globalization.DateTimeFormatInfo.CurrentInfo);
                         string txt = tweet.Text.Replace('"', ' ');
-                        string content = String.Format("created_at:\"{0}\", id:{1}, text:\"{2}\", user:\"{3}\"",
+                        string content = String.Format("\"created_at\":\"{0}\", \"id\":{1}, \"text\":\"{2}\", \"user\":\"{3}\"",
                             cd, tweet.Id, txt, tweet.User.Name);
                         Console.WriteLine("Sending \"{0}\" ...", label);
                         using (var ts = new TransactionScope())
