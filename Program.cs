@@ -49,12 +49,39 @@ namespace TweetProducer
                 }
             }
 
-            // milanofinanza 24finanza newsfinanza finanzaeborse finanza_com ilG_economia istat_it Borsa_italiana sole24ore BorsaItalianaIT bimboalieno StrategieBorsa Borseit            
+            string topicName = "mondiali2014";
+            var tweets = Get_tweets_from_search(topicName);
+            if (tweets != null)
+            {
+                if (tweets.Any())
+                {
+                    Console.WriteLine(string.Format("{0} - Getting tweets by search #{1}...",
+                                                    DateTime.Now.ToString("s"), topicName));
+
+                    foreach (var tweetsByUser in tweets.GroupBy(t => t.User.Id))
+                    {
+                        var lastTweet = tweetsByUser.OrderBy(t => t.Id).Last();
+                        var userName = lastTweet.User.ScreenName;                        
+                                        
+                        Console.WriteLine(string.Format("{0} - Sending tweets from @{1} to {2}...", 
+                            DateTime.Now.ToString("s"), userName, queueName));
+                        SendTweets(queueName, tweetsByUser);
+                    }                    
+                }
+            }
+
+            //GetTweetsByUsers(lastIdByUser, isWritten2File, pathFile, isFirstUser, queueName);
+        }
+
+        private static void GetTweetsByUsers(Dictionary<string, long?> lastIdByUser, bool isWritten2File, string pathFile, bool isFirstUser,
+                                             string queueName)
+        {
+            long? lastId;
             ConfigurationManager.RefreshSection("AppSettings");
             string userNames = ConfigurationManager.AppSettings["UserNames"];
             if (!string.IsNullOrEmpty(userNames))
             {
-                foreach (string userName in userNames.Split(new char[] { ' ' }))
+                foreach (string userName in userNames.Split(new char[] {' '}))
                 {
                     if (!lastIdByUser.TryGetValue(userName, out lastId))
                         lastId = null;
@@ -64,8 +91,8 @@ namespace TweetProducer
                     {
                         if (tweets.Any())
                         {
-                            Console.WriteLine(string.Format("{0} - Getting tweets from @{1}...", 
-                                DateTime.Now.ToString("s"), userName));
+                            Console.WriteLine(string.Format("{0} - Getting tweets from @{1}...",
+                                                            DateTime.Now.ToString("s"), userName));
                             lastId = tweets.OrderBy(t => t.Id).Last().Id;
                             lastIdByUser[userName] = lastId.Value;
                             if (isWritten2File)
@@ -75,13 +102,12 @@ namespace TweetProducer
                             }
                             else
                             {
-                                Console.WriteLine(string.Format("{0} - Sending tweets from @{1} to {2}...", 
-                                    DateTime.Now.ToString("s"), userName, queueName));
+                                Console.WriteLine(string.Format("{0} - Sending tweets from @{1} to {2}...",
+                                                                DateTime.Now.ToString("s"), userName, queueName));
                                 SendTweets(queueName, tweets);
                             }
                         }
                     }
-                    
                 }
             }
             else
@@ -295,8 +321,8 @@ namespace TweetProducer
                 var service = serviceHelper.GetAuthenticatedService();
 
                 var options = new ListSuggestedUsersOptions();
-                options.Lang = "IT";
-                options.Slug = "ambiente";
+                options.Lang = "it";
+                options.Slug = topicName;
                 var twitterUsers = service.ListSuggestedUsers(options);
                 
             }
@@ -307,6 +333,26 @@ namespace TweetProducer
             }
             return retValue;
         }
+
+        private static IEnumerable<TwitterStatus> Get_tweets_from_search(string topicName)
+        {
+            IEnumerable<TwitterStatus> retValue = null;
+            try
+            {
+                var serviceHelper = new TwitterServiceHelper();
+                var service = serviceHelper.GetAuthenticatedService();
+                var results = service.Search(new SearchOptions { Q = topicName });
+                if (results != null)
+                    retValue = results.Statuses;
+            }
+            catch (Exception exc)
+            {
+                Console.WriteLine("Caught  exception: {0} - {1}", exc.Source, exc.Message);
+                return null;
+            }
+            return retValue;       
+        }
+
     }
 
     class TwitterServiceHelper
