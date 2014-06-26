@@ -49,22 +49,22 @@ namespace TweetProducer
                 }
             }
 
-            string topicName = "mondiali2014";
-            var tweets = Get_tweets_from_search(topicName);
+            string topicsQuery = ConfigurationManager.AppSettings["TopicsQuery"];
+            var tweets = Get_tweets_from_search(topicsQuery);
             if (tweets != null)
             {
                 if (tweets.Any())
                 {
                     Console.WriteLine(string.Format("{0} - Getting tweets by search #{1}...",
-                                                    DateTime.Now.ToString("s"), topicName));
+                                                    DateTime.Now.ToString("s"), topicsQuery));
 
                     foreach (var tweetsByUser in tweets.GroupBy(t => t.User.Id))
                     {
                         var lastTweet = tweetsByUser.OrderBy(t => t.Id).Last();
-                        var userName = lastTweet.User.ScreenName;                        
-                                        
-                        Console.WriteLine(string.Format("{0} - Sending tweets from @{1} to {2}...", 
-                            DateTime.Now.ToString("s"), userName, queueName));
+                        var userName = lastTweet.User.ScreenName;
+                        Console.WriteLine();                                        
+                        Console.WriteLine(string.Format("{0} - Sending tweets from @{1}...", 
+                            DateTime.Now.ToString("s"), userName));
                         SendTweets(queueName, tweetsByUser);
                     }                    
                 }
@@ -212,12 +212,9 @@ namespace TweetProducer
 
                     foreach (var tweet in tweets)
                     {
-                        //GetEntityInfos(tweet);
+                        var content = BuildContent(tweet);
+                        content = AddInfos(tweet, content);
 
-                        string cd = tweet.CreatedDate.ToString(System.Globalization.DateTimeFormatInfo.CurrentInfo);
-                        string txt = tweet.Text.Replace('"', ' ');
-                        string content = String.Format("\"created_at\":\"{0}\", \"id\":{1}, \"text\":\"{2}\", \"user\":\"{3}\"",
-                            cd, tweet.Id, txt, tweet.User.Name);
                         Console.WriteLine("Sending \"{0}\" ...", label);
                         using (var ts = new TransactionScope())
                         {
@@ -237,8 +234,31 @@ namespace TweetProducer
             }
         }
 
+        private static string BuildContent(TwitterStatus tweet)
+        {
+            string cd = tweet.CreatedDate.ToString(System.Globalization.DateTimeFormatInfo.CurrentInfo);
+            string txt = tweet.Text.Replace('"', ' ');
+            string content = String.Format("\"created_at\":\"{0}\",\"id\":{1},\"text\":\"{2}\",\"user\":\"{3}\"",
+                                           cd, tweet.Id, txt, tweet.User.Name);
+            return content;
+        }
+
+        private static string AddInfos(TwitterStatus tweet, string content)
+        {
+            List<string> hashtagText;
+            List<string> mentionText;
+            List<string> urlText;
+            GetEntityInfos(tweet, out hashtagText, out mentionText, out urlText);
+            string ht = string.Join(",", hashtagText);
+            string mnt = string.Join(",", mentionText);
+            string url = string.Join(",", urlText);
+            content += String.Format(",\"hashtag\":[{0}],\"mention\":[{1}],\"url\":[{2}]",
+                                     ht, mnt, url);
+            return content;
+        }
+
         private static void GetEntityInfos(TwitterStatus tweet, 
-            out List<string> hashtagText, List<string> mentionText, List<string> urlText)
+            out List<string> hashtagText, out List<string> mentionText, out List<string> urlText)
         {
             hashtagText = new List<string>();
             mentionText = new List<string>();
@@ -334,14 +354,14 @@ namespace TweetProducer
             return retValue;
         }
 
-        private static IEnumerable<TwitterStatus> Get_tweets_from_search(string topicName)
+        private static IEnumerable<TwitterStatus> Get_tweets_from_search(string query)
         {
             IEnumerable<TwitterStatus> retValue = null;
             try
             {
                 var serviceHelper = new TwitterServiceHelper();
                 var service = serviceHelper.GetAuthenticatedService();
-                var results = service.Search(new SearchOptions { Q = topicName });
+                var results = service.Search(new SearchOptions { Q = query });
                 if (results != null)
                     retValue = results.Statuses;
             }
