@@ -49,70 +49,164 @@ namespace TweetProducer
                 }
             }
 
-            string topicsQuery = ConfigurationManager.AppSettings["TopicsQuery"];
-            var tweets = Get_tweets_from_search(topicsQuery);
-            if (tweets != null)
+            string userNames = ConfigurationManager.AppSettings["UserNames"];
+            var userShuffle = Shuffle(userNames.Split(new char[] {'|'}));
+            foreach (string userName in userShuffle)
             {
-                if (tweets.Any())
-                {
-                    Console.WriteLine(string.Format("{0} - Getting tweets by search #{1}...",
-                                                    DateTime.Now.ToString("s"), topicsQuery));
+                SendTweetsByUser(lastIdByUser, userName, lastId, queueName, null);
+            }
 
-                    foreach (var tweetsByUser in tweets.GroupBy(t => t.User.Id))
+            string topicsQuery = ConfigurationManager.AppSettings["TopicsQuery"];
+            var topicsShuffle = Shuffle(topicsQuery.Split(new char[] { '|' }));
+            foreach (string topicQuery in topicsShuffle)
+            {
+                Console.WriteLine();
+                Console.WriteLine(string.Format("{0} - Getting tweets by search \"{1}\"...",
+                                                                    DateTime.Now.ToString("s"), topicQuery));                
+                var tweets = Get_tweets_from_search(topicQuery, null);
+
+                if (tweets != null && tweets.Any())
+                {
+                    var tweetsGroupByUser = tweets.GroupBy(t => t.User.Id);
+                    foreach (var tweetsByUser in tweetsGroupByUser)
                     {
                         var lastTweet = tweetsByUser.OrderBy(t => t.Id).Last();
                         var userName = lastTweet.User.ScreenName;
-                        Console.WriteLine();                                        
-                        Console.WriteLine(string.Format("{0} - Sending tweets from @{1}...", 
-                            DateTime.Now.ToString("s"), userName));
-                        SendTweets(queueName, tweetsByUser);
-                    }                    
-                }
-            }
 
-            //GetTweetsByUsers(lastIdByUser, isWritten2File, pathFile, isFirstUser, queueName);
+                        if (lastIdByUser.TryGetValue(userName, out lastId))
+                        {
+                            if (lastId >= lastTweet.Id)
+                            {
+                                //SendTweetsByFriendship(lastIdByUser, userName, topicQuery, lastId, queueName, 7);
+                                continue;
+                            }
+                        }
+                        else
+                        {
+                            lastIdByUser[userName] = lastTweet.Id;
+
+                            Console.WriteLine();
+                            Console.WriteLine(string.Format("{0} - Sending tweets from @{1}...",
+                                DateTime.Now.ToString("s"), userName));
+                            SendTweets(queueName, tweetsByUser);
+                        }
+                        
+                        SendTweetsByUser(lastIdByUser, userName, lastId, queueName, topicQuery);
+                    }
+                }
+                
+            }
+            
         }
 
-        private static void GetTweetsByUsers(Dictionary<string, long?> lastIdByUser, bool isWritten2File, string pathFile, bool isFirstUser,
-                                             string queueName)
+        private static void SendTweetsByFriendship(Dictionary<string, long?> lastIdByUser, string userName, string topicQuery, long? lastId,
+                                                   string queueName, int recurCount)
         {
-            long? lastId;
-            ConfigurationManager.RefreshSection("AppSettings");
-            string userNames = ConfigurationManager.AppSettings["UserNames"];
-            if (!string.IsNullOrEmpty(userNames))
-            {
-                foreach (string userName in userNames.Split(new char[] {' '}))
-                {
-                    if (!lastIdByUser.TryGetValue(userName, out lastId))
-                        lastId = null;
+            if (recurCount <= 0)
+                return;
 
-                    var tweets = Get_tweets_on_specified_user_timeline(userName, lastId);
-                    if (tweets != null)
+            var tweetFriends = Get_tweets_by_user_friends(userName);
+            if (tweetFriends != null)
+            {
+                foreach (var tweetFriend in tweetFriends.Where(t => t.Status != null))
+                {
+                    List<string> hashtags;
+                    List<string> mentions;
+                    List<string> urls;
+                    GetEntityInfos(tweetFriend.Status, out hashtags, out mentions, out urls);
+                    if (hashtags.Any())
                     {
-                        if (tweets.Any())
+                        foreach (var topic in topicQuery.Split(new char[] {'+'}))
                         {
-                            Console.WriteLine(string.Format("{0} - Getting tweets from @{1}...",
-                                                            DateTime.Now.ToString("s"), userName));
-                            lastId = tweets.OrderBy(t => t.Id).Last().Id;
-                            lastIdByUser[userName] = lastId.Value;
-                            if (isWritten2File)
+                            foreach (var hashtag in hashtags)
                             {
-                                WriteTweets(pathFile, isFirstUser, tweets);
-                                isFirstUser = false;
+                                string ht = hashtag.Trim(new char[] { '#', '\"' });
+                                if (ht.Contains(topic.Trim()))
+                                    SendTweetsByUser(lastIdByUser, tweetFriend.ScreenName, lastId, queueName, null);
                             }
-                            else
-                            {
-                                Console.WriteLine(string.Format("{0} - Sending tweets from @{1} to {2}...",
-                                                                DateTime.Now.ToString("s"), userName, queueName));
-                                SendTweets(queueName, tweets);
-                            }
+                        }
+                    }
+                    if (mentions.Any())
+                    {
+                        foreach (var mention in mentions)
+                        {
+                            string mentionName = mention.Trim(new char[] {'@', '\"'});
+                            SendTweetsByFriendship(lastIdByUser, mentionName, topicQuery, lastId, queueName, recurCount-1);
                         }
                     }
                 }
             }
-            else
+        }
+
+        private static void SendTweetsByUser(Dictionary<string, long?> lastIdByUser, string userName, long? lastId,
+            string queueName, string topicQuery)
+        {
+            Console.WriteLine(string.Format("{0} - Getting tweets from @{1} since Id={2}...", 
+                DateTime.Now.ToString("s"), userName, lastId));
+
+            IEnumerable<TwitterStatus> tweets;
+            tweets = Get_tweets_on_specified_user_timeline(userName, lastId);
+            if (tweets != null && tweets.Any())
             {
-                Console.Error.WriteLine("Missing appSetting in the config: UserNames");
+                if (string.IsNullOrEmpty(topicQuery))
+                {
+                    lastId = tweets.OrderBy(t => t.Id).Last().Id;
+                    lastIdByUser[userName] = lastId.Value;
+                    Console.WriteLine();
+                    Console.WriteLine(string.Format("{0} - Sending tweets from @{1}...",
+                                                    DateTime.Now.ToString("s"), userName));
+                    SendTweets(queueName, tweets);
+                }
+                else
+                {
+                    var topicTweets = new List<TwitterStatus>();
+                    foreach (var tweet in tweets)
+                    {
+                        List<string> hashtags;
+                        List<string> mentions;
+                        List<string> urls;
+                        GetEntityInfos(tweet, out hashtags, out mentions, out urls);
+                        foreach (var topic in topicQuery.Split(new char[] { '+' }))
+                        {
+                            foreach (var hashtag in hashtags)
+                            {
+                                string ht = hashtag.Trim(new char[] { '#', '\"' });
+                                if (ht.Contains(topic.Trim(new char[] { '#', '\"', ' '})))
+                                    topicTweets.Add(tweet);
+                            }
+                        }
+                    }
+                    if (topicTweets.Any())
+                    {
+                        lastId = topicTweets.OrderBy(t => t.Id).Last().Id;
+                        lastIdByUser[userName] = lastId.Value;
+                        Console.WriteLine();
+                        Console.WriteLine(string.Format("{0} - Sending tweets from @{1}...",
+                                                        DateTime.Now.ToString("s"), userName));
+                        SendTweets(queueName, topicTweets);                        
+                    }
+                }
+
+            }
+        }
+
+        private static IEnumerable<TwitterUser> Get_tweets_by_user_friends(string userName)
+        {
+            try
+            {
+                var serviceHelper = new TwitterServiceHelper();
+                var service = serviceHelper.GetAuthenticatedService();
+
+                return service.ListFriends(
+                    new ListFriendsOptions()
+                        {
+                            ScreenName = userName
+                        });
+            }
+            catch (Exception exc)
+            {
+                Console.WriteLine("Caught  exception: {0} - {1}", exc.Source, exc.Message);
+                return null;
             }
         }
 
@@ -209,10 +303,10 @@ namespace TweetProducer
                 if (queue.Transactional)
                 {
                     queue.Formatter = new System.Messaging.XmlMessageFormatter(new String[] { "System.String,mscorlib" });
-
+                    
                     foreach (var tweet in tweets)
                     {
-                        var content = BuildContent(tweet);
+                        var content = BuildContent(tweet);                        
                         content = AddInfos(tweet, content);
 
                         Console.WriteLine("Sending \"{0}\" ...", label);
@@ -244,14 +338,15 @@ namespace TweetProducer
         }
 
         private static string AddInfos(TwitterStatus tweet, string content)
-        {
-            List<string> hashtagText;
-            List<string> mentionText;
-            List<string> urlText;
-            GetEntityInfos(tweet, out hashtagText, out mentionText, out urlText);
-            string ht = string.Join(",", hashtagText);
-            string mnt = string.Join(",", mentionText);
-            string url = string.Join(",", urlText);
+        {            
+            List<string> hashtags;
+            List<string> mentions;
+            List<string> urls;
+            GetEntityInfos(tweet, out hashtags, out mentions, out urls);
+
+            string ht = string.Join(",", hashtags);
+            string mnt = string.Join(",", mentions);
+            string url = string.Join(",", urls);
             content += String.Format(",\"hashtag\":[{0}],\"mention\":[{1}],\"url\":[{2}]",
                                      ht, mnt, url);
             return content;
@@ -287,9 +382,7 @@ namespace TweetProducer
                         var url = ((TwitterUrl)entity).Value;
                         Console.WriteLine("URL: " + url);
                         urlText.Add("\"" + text.Substring(entity.StartIndex, entity.EndIndex - entity.StartIndex) + "\"");
-                        break;
-                    default:
-                        throw new ArgumentOutOfRangeException();
+                        break;                    
                 }
             }
         }
@@ -310,58 +403,20 @@ namespace TweetProducer
             }
         }
 
-        private static IEnumerable<TwitterStatus> Get_friend_tweets(string screenName)
+        private static IEnumerable<TwitterStatus> Get_tweets_from_search(string query, long? maxId)
         {
-            var tweets = new List<TwitterStatus>();
+            IEnumerable<TwitterStatus> retValue = null;            
+
             try
             {
                 var serviceHelper = new TwitterServiceHelper();
                 var service = serviceHelper.GetAuthenticatedService();
-                var friendIds = service.ListFriendIdsOf(new ListFriendIdsOfOptions() { ScreenName = screenName, Count = 100 });
-                foreach (var id in friendIds)
-                {
-                    var tweet = service.GetTweet(new GetTweetOptions { Id = id });
-                    if (tweet != null)
-                        tweets.Add(tweet);
-                }
-            }
-            catch (Exception exc)
-            {
-                Console.Error.WriteLine(exc.Message);
-            }
-            return tweets;
-        }
-
-        private static IEnumerable<TwitterStatus> Get_tweets_on_specified_topic(string topicName)
-        {
-            IEnumerable<TwitterStatus> retValue = null;
-            try
-            {
-                var serviceHelper = new TwitterServiceHelper();
-                var service = serviceHelper.GetAuthenticatedService();
-
-                var options = new ListSuggestedUsersOptions();
-                options.Lang = "it";
-                options.Slug = topicName;
-                var twitterUsers = service.ListSuggestedUsers(options);
-                
-            }
-            catch (Exception exc)
-            {
-                Console.WriteLine("Caught  exception: {0} - {1}", exc.Source, exc.Message);
-                return null;
-            }
-            return retValue;
-        }
-
-        private static IEnumerable<TwitterStatus> Get_tweets_from_search(string query)
-        {
-            IEnumerable<TwitterStatus> retValue = null;
-            try
-            {
-                var serviceHelper = new TwitterServiceHelper();
-                var service = serviceHelper.GetAuthenticatedService();
-                var results = service.Search(new SearchOptions { Q = query });
+                var italyGeoCode = new TwitterGeoLocationSearch(41.9, 12.5, 10, TwitterGeoLocationSearch.RadiusType.Mi);
+                var results = service.Search(
+                    new SearchOptions
+                        {
+                            Q = query, Geocode = italyGeoCode, Lang = "it"
+                        });
                 if (results != null)
                     retValue = results.Statuses;
             }
@@ -371,6 +426,20 @@ namespace TweetProducer
                 return null;
             }
             return retValue;       
+        }
+
+        private static string[] Shuffle(string[] array)
+        {
+            var rnd = new Random(DateTime.Now.Millisecond);
+            int n = array.Count();
+            while (n > 0) 
+            {
+                var i = rnd.Next(0, n--); // 0 ≤ i < n
+                var t = array[n];
+                array[n] = array[i];
+                array[i] = t;
+            }
+            return array;
         }
 
     }
